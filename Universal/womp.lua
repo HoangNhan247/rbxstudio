@@ -17,11 +17,14 @@ t.TextScaled = true
 t.Text = 'Loading...'
 
 workspace.ChildAdded:Connect(function(c)
+    print(c.Name)
     if game.Players:FindFirstChild(c.Name) then return end
-    pcall(function() 
+    local s, r = pcall(function() 
         local cT = c.Part.Info.AnimalOverhead:WaitForChild('DisplayName', 5)
         if cT then 
           t.Text = cT.ContextText 
         end
     end)
+
+    if not s then print(r) end
 end)
