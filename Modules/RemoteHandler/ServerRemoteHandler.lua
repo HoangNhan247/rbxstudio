@@ -3,9 +3,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 local Players = game:GetService("Players")
 
-local module = { remoteIndex = {}, onCooldown = {}, Initalized = false }
+local module = {}
 
-local remoteIndex = module.remoteIndex
+local Remotes = ReplicatedStorage.Remotes
+local remoteIndex = {}
+local onCooldown = {}
+local Initialized = false
 
 local remoteMeta = {}
 local connectionMeta = {}
@@ -53,13 +56,13 @@ function remoteMeta:registerRequest(func: (Player, any) -> (), restrictions: {}?
 end
 
 function remoteMeta:Fire(p: Player, data: any)
-	if module.onCooldown[p.UserId][self._instance.Name] then
+	if onCooldown[p.UserId][self._instance.Name] then
 		print(p.Name, ' on cooldown')
 	else
 		task.spawn(function()
-			module.onCooldown[p.UserId][self._instance.Name] = true
+			onCooldown[p.UserId][self._instance.Name] = true
 			task.wait(self._cooldown or 0)
-			module.onCooldown[p.UserId][self._instance.Name] = nil
+			onCooldown[p.UserId][self._instance.Name] = nil
 		end)
 	end
 	
@@ -90,14 +93,14 @@ function remoteMeta:Fire(p: Player, data: any)
 end
 
 function remoteMeta:Invoke(p: Player, data: any)
-	if module.onCooldown[p.UserId][self._instance.Name] then
+	if onCooldown[p.UserId][self._instance.Name] then
 		print(p.Name, ' on cooldown')
 		return { Success = false, Result = 0 }
 	else
 		task.spawn(function()
-			module.onCooldown[p.UserId][self._instance.Name] = true
+			onCooldown[p.UserId][self._instance.Name] = true
 			task.wait(self._cooldown or 0)
-			module.onCooldown[p.UserId][self._instance.Name] = nil
+			onCooldown[p.UserId][self._instance.Name] = nil
 		end)
 	end
 	
@@ -141,7 +144,7 @@ function module.Init()
 	assert(ReplicatedStorage.Remotes, "RH :: Remotes folder not found.")
 	
 	for _, remote in ReplicatedStorage.Remotes:GetDescendants() do
-		if ( remote:IsA("RemoteEvent") or remote:IsA('RemoteFunction') ) and not remoteIndex[remote.Name] then
+		if ( remote:IsA("RemoteEvent") or remote:IsA('RemoteFunction') or remote:IsA('UnreliableRemoteEvent') ) and not remoteIndex[remote.Name] then
 			local newRemoteMeta = {}
 			
 			newRemoteMeta._instance = remote
@@ -150,10 +153,10 @@ function module.Init()
 			setmetatable(newRemoteMeta, remoteMeta)
 			remoteIndex[remote.Name] = newRemoteMeta
 			
-			if remote:IsA('RemoteEvent') then
+			if ( remote:IsA('RemoteEvent') or remote:IsA('UnreliableRemoteEvent') ) then
 				newRemoteMeta._connections = {}
 				newRemoteMeta._signal = remote.OnServerEvent:Connect(function(p, data)
-					module.onCooldown[p.UserId] = module.onCooldown[p.UserId] or {}
+					onCooldown[p.UserId] = onCooldown[p.UserId] or {}
 					newRemoteMeta:Fire(p, data)
 				end)
 			elseif remote:IsA('RemoteFunction') then
@@ -161,7 +164,7 @@ function module.Init()
 				newRemoteMeta._restrictions = {}
 				
 				remote.OnServerInvoke = function(p, data)
-					module.onCooldown[p.UserId] = module.onCooldown[p.UserId] or {}
+					onCooldown[p.UserId] = onCooldown[p.UserId] or {}
 					return newRemoteMeta:Invoke(p, data)
 				end
 			end
@@ -170,13 +173,13 @@ function module.Init()
 		end
 	end
 	
-	module.Initalized = true
+	Initialized = true
 end
 
 function module.registerRemote(name: string, remoteType: "Event"|"Request", restrictions: {}?, cooldown: number?, func: (Player, any) -> ())
 	repeat
 		task.wait()
-	until module.Initalized == true
+	until Initialized == true
 	
 	local remote = remoteIndex[name]
 	
@@ -186,6 +189,48 @@ function module.registerRemote(name: string, remoteType: "Event"|"Request", rest
 		return remote:registerRequest(func, restrictions, cooldown)
 	else
 		warn("RH :: '" .. remoteType .. "' is not a valid remote type.")
+	end
+end
+
+function module.FireClient(remoteName: string, player: Player, data: any)
+	if Remotes:FindFirstChild(remoteName) then
+		Remotes[remoteName]:FireClient(player, data)
+		print("RH :: Fired ", player, data)
+	else
+		warn("RH :: '" .. remoteName .. "' is not a valid remote name.")
+	end
+end
+
+function module.FireAllClients(remoteName: string, data: any)
+	if Remotes:FindFirstChild(remoteName) then
+		Remotes[remoteName]:FireAllClients(data)
+		print("RH :: Fired ", data)
+	else
+		warn("RH :: '" .. remoteName .. "' is not a valid remote name.")
+	end
+end
+
+function module.FireClients(remoteName: string, players: {Player}, data: any)
+	if Remotes:FindFirstChild(remoteName) then
+		for _, player in players do
+			Remotes[remoteName]:FireClient(player, data)
+			print("RH :: Fired ", player, data)
+		end
+	else
+		warn("RH :: '" .. remoteName .. "' is not a valid remote name.")
+	end
+end
+
+function module.FireAllExcept(remoteName: string, player: Player, data: any)
+	if Remotes:FindFirstChild(remoteName) then
+		for _, p in Players:GetPlayers() do
+			if p ~= player then
+				Remotes[remoteName]:FireClient(p, data)
+				print("RH :: Fired ", p, data)
+			end
+		end
+	else
+		warn("RH :: '" .. remoteName .. "' is not a valid remote name.")
 	end
 end
 
