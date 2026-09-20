@@ -40,6 +40,7 @@ end
 -- Only allows data with correct types
 function module.typeChecking(t: {[string]: string})
 	return function (p: Player, data: {any})
+		local t = table.clone(t)
 		for i, v in data do
 			if not t[i] then
 				warn('RR :: Unknown argument', i, t, data)
@@ -56,6 +57,7 @@ end
 -- Only allows RIGHT AMOUNT of data with correct types
 function module.typeStrict(t: {[string]: string})
 	return function (p: Player, data: {any})
+		local t = table.clone(t)
 		for i, v in data do
 			if ( not t[i] ) or ( typeof(v) ~= t[i] ) then
 				warn('RR :: Type stricted', t, data)
@@ -65,8 +67,8 @@ function module.typeStrict(t: {[string]: string})
 			t[i] = nil
 		end
 		
-		if t ~= {} then
-			warn('RR :: Type missing', t, data)
+		if next(t) then
+			warn('RR :: Type overflow', t, data)
 			return false
 		end
 		
@@ -75,6 +77,7 @@ function module.typeStrict(t: {[string]: string})
 end
 
 function module.forceData(t: {[string]: string})
+	local t = table.clone(t)
 	return function (p: Player, data: {any})
 		for i, v in t do
 			if not data[i] or data[i] ~= t[i] then
