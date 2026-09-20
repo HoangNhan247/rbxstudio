@@ -5,9 +5,11 @@ local Players = game:GetService("Players")
 
 local module = {}
 
-local Remotes = ReplicatedStorage.Remotes
+local remoteFolderIndex = {}
 local remoteIndex = {}
+
 local onCooldown = {}
+local onHold = {}
 local Initialized = false
 
 local remoteMeta = {}
@@ -56,24 +58,24 @@ function remoteMeta:registerRequest(func: (Player, any) -> (), restrictions: {}?
 end
 
 function remoteMeta:Fire(p: Player, data: any)
-	if onCooldown[p.UserId][self._instance.Name] then
+	if onCooldown[self._instance.Name][p.UserId] then
 		print(p.Name, ' on cooldown')
 	else
 		task.spawn(function()
-			onCooldown[p.UserId][self._instance.Name] = true
+			onCooldown[self._instance.Name][p.UserId] = true
 			task.wait(self._cooldown or 0)
-			onCooldown[p.UserId][self._instance.Name] = nil
+			onCooldown[self._instance.Name][p.UserId] = nil
 		end)
 	end
 	
 	for _, connection in self._connections do
 		local restrictionHit = false
-		
 		if connection._restrictions then
 			for _, func in connection._restrictions do
 				if not func(p, data) then
 					warn("RH :: Restrictions validate failed", {self, p, data})
 					restrictionHit = true
+					break
 				end
 			end
 		end
@@ -92,15 +94,50 @@ function remoteMeta:Fire(p: Player, data: any)
 	end
 end
 
+function remoteMeta:holdFire(p: Player, data: any)
+	if onHold[self._instance.Name][p.UserId] then
+		print(p.Name, ' on fired')
+	else
+		onHold[self._instance.Name][p.UserId] = true
+	end
+
+	for _, connection in self._connections do
+		local restrictionHit = false
+		if connection._restrictions then
+			for _, func in connection._restrictions do
+				if not func(p, data) then
+					warn("RH :: Restrictions validate failed", {self, p, data})
+					restrictionHit = true
+					break
+				end
+			end
+		end
+
+		if restrictionHit then
+			continue
+		end
+
+		local success, err = pcall(function()
+			connection._func(p, data)
+		end)
+
+		if not success then
+			warn("RH :: Error while firing ", {self, connection, p, data})
+		end
+	end
+	
+	onHold[self._instance.Name][p.UserId] = nil
+end
+
 function remoteMeta:Invoke(p: Player, data: any)
-	if onCooldown[p.UserId][self._instance.Name] then
+	if onCooldown[self._instance.Name][p.UserId] then
 		print(p.Name, ' on cooldown')
 		return { Success = false, Result = 0 }
 	else
 		task.spawn(function()
-			onCooldown[p.UserId][self._instance.Name] = true
+			onCooldown[self._instance.Name][p.UserId] = true
 			task.wait(self._cooldown or 0)
-			onCooldown[p.UserId][self._instance.Name] = nil
+			onCooldown[self._instance.Name][p.UserId] = nil
 		end)
 	end
 	
@@ -152,20 +189,24 @@ function module.Init()
 			
 			setmetatable(newRemoteMeta, remoteMeta)
 			remoteIndex[remote.Name] = newRemoteMeta
+			remoteFolderIndex[remote.Name] = remote
+			
+			onCooldown[remote.Name] = {}
+			onHold[remote.Name] = {}
 			
 			if ( remote:IsA('RemoteEvent') or remote:IsA('UnreliableRemoteEvent') ) then
 				newRemoteMeta._connections = {}
+				newRemoteMeta._onSignal = "Fire"
 				newRemoteMeta._signal = remote.OnServerEvent:Connect(function(p, data)
-					onCooldown[p.UserId] = onCooldown[p.UserId] or {}
-					newRemoteMeta:Fire(p, data)
+					newRemoteMeta[newRemoteMeta._onSignal](newRemoteMeta, p, data)
 				end)
 			elseif remote:IsA('RemoteFunction') then
 				newRemoteMeta._connection = nil
+				newRemoteMeta._onSignal = "Invoke"
 				newRemoteMeta._restrictions = {}
 				
 				remote.OnServerInvoke = function(p, data)
-					onCooldown[p.UserId] = onCooldown[p.UserId] or {}
-					return newRemoteMeta:Invoke(p, data)
+					return newRemoteMeta[newRemoteMeta._onSignal](newRemoteMeta, p, data)
 				end
 			end
 			
@@ -192,9 +233,19 @@ function module.registerRemote(name: string, remoteType: "Event"|"Request", rest
 	end
 end
 
+function module.changeRemoteMethod(name: string, method: string)
+	local remote = remoteIndex[name]
+	if remote then
+		remote._onSignal = method
+		print("RH :: Changed " .. remote._instance.Name .. " method to " .. method)
+	else
+		warn('RH :: Invalid remote')
+	end
+end
+
 function module.FireClient(remoteName: string, player: Player, data: any)
-	if Remotes:FindFirstChild(remoteName) then
-		Remotes[remoteName]:FireClient(player, data)
+	if remoteFolderIndex[remoteName] then
+		remoteFolderIndex[remoteName]:FireClient(player, data)
 		print("RH :: Fired ", player, data)
 	else
 		warn("RH :: '" .. remoteName .. "' is not a valid remote name.")
@@ -202,8 +253,8 @@ function module.FireClient(remoteName: string, player: Player, data: any)
 end
 
 function module.FireAllClients(remoteName: string, data: any)
-	if Remotes:FindFirstChild(remoteName) then
-		Remotes[remoteName]:FireAllClients(data)
+	if remoteFolderIndex[remoteName] then
+		remoteFolderIndex[remoteName]:FireAllClients(data)
 		print("RH :: Fired ", data)
 	else
 		warn("RH :: '" .. remoteName .. "' is not a valid remote name.")
@@ -211,9 +262,9 @@ function module.FireAllClients(remoteName: string, data: any)
 end
 
 function module.FireClients(remoteName: string, players: {Player}, data: any)
-	if Remotes:FindFirstChild(remoteName) then
+	if remoteFolderIndex[remoteName] then
 		for _, player in players do
-			Remotes[remoteName]:FireClient(player, data)
+			remoteFolderIndex[remoteName]:FireClient(player, data)
 			print("RH :: Fired ", player, data)
 		end
 	else
@@ -222,10 +273,10 @@ function module.FireClients(remoteName: string, players: {Player}, data: any)
 end
 
 function module.FireAllExcept(remoteName: string, player: Player, data: any)
-	if Remotes:FindFirstChild(remoteName) then
+	if remoteFolderIndex[remoteName] then
 		for _, p in Players:GetPlayers() do
 			if p ~= player then
-				Remotes[remoteName]:FireClient(p, data)
+				remoteFolderIndex[remoteName]:FireClient(p, data)
 				print("RH :: Fired ", p, data)
 			end
 		end
