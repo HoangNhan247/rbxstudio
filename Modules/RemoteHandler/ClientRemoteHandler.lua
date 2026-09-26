@@ -1,169 +1,127 @@
 --// Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local ServerScriptService = game:GetService("ServerScriptService")
 local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 
-local module = { remoteIndex = {} }
-
-local remoteIndex = module.remoteIndex
-
-local remoteMeta = {}
+local module = { remoteIndex = {}, remoteConnections = {} }
 local connectionMeta = {}
 
-remoteMeta.__index = remoteMeta
 connectionMeta.__index = connectionMeta
 
 --// Meta functions
 
-function remoteMeta:Fire(data: any)	
-	for _, connection in self._connections do
-		if connection._restrictions then
-			for _, func in connection._restrictions do
-				if not func(data) then
-					warn("RH :: Restrictions validate triggered", {self, data})
-				end
-			end
-		end
-				
-		local success, err = pcall(function()
-			connection._func(data)
-		end)
-		
-		if not success then
-			warn("RH :: Error while firing ", {self, connection, data})
-		end
-	end
+function connectionMeta:Fire(data: {any})
+	self._func(data)
 end
 
-function remoteMeta:Reset()
-	self._connections = {}
-	self._id = 0
-	warn('RH :: ' .. self._instance.Name .. ' reseted.')
-end
-
-function remoteMeta:Destroy()
-	remoteIndex[self._instance.Name] = nil
-	
-	self._connections = {}
-	self._signal:Disconnect()
-	self._signal = nil
-	self._instance = nil
-	self._id = nil
-	self._cooldown = nil
-	self._func = nil
-	self._restrictions = nil
-	
-	warn('RH :: ' .. self._instance.Name .. ' destroyed.')
+function connectionMeta:Destroy()
+	module.remoteConnections[self._key] = nil
 end
 
 --// Module functions
 
 function module.Init()
 	assert(ReplicatedStorage.Remotes, "RH :: Remotes folder not found.")
-	
+
 	for _, remote in ReplicatedStorage.Remotes:GetDescendants() do
 		if remote:IsA("RemoteEvent") then
-			
-			if remoteIndex[remote.Name] then
+			if module.remoteIndex[remote.Name] then
 				warn('CRH :: Duplicated remote :: ', remote.Name)
 				continue
 			end
 			
-			local newRemoteMeta = {}
+			module.remoteConnections[remote.Name] = {}
+			module.remoteIndex[remote.Name] = {
+				_instance = remote,
+				_signal = remote.OnClientEvent:Connect(function(data)
+					for _, c in module.remoteConnections[remote.Name] do
+						c:Fire(data)
+					end
+				end)
+			}
+		elseif remote:IsA("RemoteFunction") then
+			if module.remoteIndex[remote.Name] then
+				warn('CRH :: Duplicated remote :: ', remote.Name)
+				continue
+			end
 			
-			newRemoteMeta._instance = remote
-			newRemoteMeta._id = 0
-			
-			setmetatable(newRemoteMeta, remoteMeta)
-			remoteIndex[remote.Name] = newRemoteMeta
-			
-			newRemoteMeta._connections = {}
-			newRemoteMeta._signal = remote.OnClientEvent:Connect(function(data)
-				newRemoteMeta:Fire(data)
-			end)
-			
-			print('CRH :: New event', newRemoteMeta)
+			module.remoteConnections[remote.Name] = nil
+			module.remoteIndex[remote.Name] = {_instance = remote}
+			remote.OnClientInvoke = function(data)
+				if module.remoteConnections[remote.Name] then
+					module.remoteConnections[remote.Name](data)
+				end
+			end
 		end
 	end
-	
+
 	module.Initalized = true
 end
 
-function module.registerEvent(name: string, restrictions: {}?, func: (Player, any) -> ())
+function module.registerRemote(name: string, remoteType: "Event"|"Request", func: (any), key: string?): boolean
+	repeat
+		task.wait()
+	until module.Initalized == true
+
+	local remote = module.remoteIndex[name]
+	if remote then
+		if remote:IsA("RemoteEvent") then
+			local newConnectionMeta = {}
+			newConnectionMeta._key = key or HttpService:GenerateGUID(false)
+			newConnectionMeta._func = func
+
+			module.remoteConnections[name][newConnectionMeta._key] = newConnectionMeta
+
+			setmetatable(newConnectionMeta, connectionMeta)
+			print('CRH :: New event connection', newConnectionMeta)
+			
+			return newConnectionMeta
+		elseif remote:IsA("RemoteFunction") then
+			local newConnectionMeta = {}
+			newConnectionMeta._func = func
+			
+			if module.remoteConnections[name] then
+				warn('CRH :: Connection overlapped', name)
+			end
+				
+			module.remoteConnections[name] = newConnectionMeta
+
+			setmetatable(newConnectionMeta, connectionMeta)
+			print('CRH :: New request connection', newConnectionMeta)
+
+			return newConnectionMeta
+		end
+	else
+		warn('CRH :: Remote not found', name)
+		return nil
+	end
+end
+
+function module.FireServer(name: string, data: {any}?)
+	repeat
+		task.wait()
+	until module.Initalized == true
+
+	local remote = module.remoteIndex[name]
+	if remote and remote:IsA("RemoteEvent") then
+		remote:FireServer(data)
+	else
+		warn('CRH :: Remote not found', name)
+	end
+end
+
+function module.InvokeServer(name: string, data: {any}?): {any}
 	repeat
 		task.wait()
 	until module.Initalized == true
 	
-	local remote = remoteIndex[name]
-	
-	if remote then
-		local newConnectionMeta = {}
-
-		newConnectionMeta._func = func
-		newConnectionMeta._id = remote._id
-		newConnectionMeta._remote = remote._instance
-		newConnectionMeta._restrictions = restrictions
-
-		remote._id += 1
-		remote._connections[tostring(newConnectionMeta._id)] = newConnectionMeta
-
-		setmetatable(newConnectionMeta, connectionMeta)
-		print('New event connection', newConnectionMeta)
-		return newConnectionMeta
+	local remote = module.remoteIndex[name]
+	if remote and remote:IsA("RemoteFunction") then
+		return remote:InvokeServer(data)
+	else
+		warn('CRH :: Remote not found', name)
+		return nil
 	end
 end
-
---// Restrictions
-
-module.Restrictions = {
-	-- Only allows data with correct types
-	typeChecking = function(t: {[string]: string})
-		return function (p: Player, data: {any})
-			for i, v in data do
-				if not t[i] then
-					warn('RR :: Unknown argument', i, t, data)
-				elseif typeof(v) ~= t[i] then
-					warn('RR :: Type checking failed', t, data)
-					return false
-				end
-			end
-
-			return true
-		end
-	end,
-
-	-- Only allows RIGHT AMOUNT of data with correct types
-	typeStrict = function(t: {[string]: string})
-		return function (p: Player, data: {any})
-			for i, v in data do
-				if ( not t[i] ) or ( typeof(v) ~= t[i] ) then
-					warn('RR :: Type stricted', t, data)
-					return false
-				end
-
-				t[i] = nil
-			end
-
-			if t ~= {} then
-				warn('RR :: Type missing', t, data)
-				return false
-			end
-
-			return true
-		end
-	end,
-
-	forceData = function(t: {[string]: string})
-		return function (p: Player, data: {any})
-			for i, v in t do
-				if not data[i] or data[i] ~= t[i] then
-					return false
-				end
-			end
-
-			return true
-		end
-	end,
-}
 
 return module
