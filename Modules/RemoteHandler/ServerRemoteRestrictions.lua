@@ -1,10 +1,12 @@
 --// Services
 local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local MarketplaceService = game:GetService("MarketplaceService")
 
 local Staff = require(ServerScriptService.GameData.Staff)
 
 local module = {}
+local temp = {}
 
 --// Module functions
 
@@ -86,6 +88,42 @@ function module.forceData(t: {[string]: string})
 		end
 		
 		return true
+	end
+end
+
+function module.hasGamepass(id: number, persist: boolean?)
+	return function(p: Player, data: {any})
+		if temp[id] and temp[id][p.UserId] then
+			return true
+		end
+		
+		local Owned = MarketplaceService:UserOwnsGamePassAsync(p.UserId, id)
+		if Owned then
+			if persist then
+				temp[id] = temp[id] or {}
+				temp[id][p.UserId] = true
+			end
+		end
+		
+		return Owned
+	end
+end
+
+function module.hasAsset(id: number, persist: boolean?)
+	return function(p: Player, data: {any})
+		if temp[id] and temp[id][p.UserId] then
+			return true
+		end
+
+		local Owned = MarketplaceService:PlayerOwnsAssetAsync(p, id)
+		if Owned then
+			if persist then
+				temp[id] = temp[id] or {}
+				temp[id][p.UserId] = true
+			end
+		end
+
+		return Owned
 	end
 end
 
