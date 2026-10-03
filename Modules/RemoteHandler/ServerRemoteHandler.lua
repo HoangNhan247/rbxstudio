@@ -132,7 +132,7 @@ end
 function remoteMeta:Invoke(p: Player, data: any)
 	if onCooldown[self._instance.Name][p.UserId] then
 		print(p.Name, ' on cooldown')
-		return { Success = false, Result = 0 }
+		return { Success = false, Result = 2 }
 	else
 		task.spawn(function()
 			onCooldown[self._instance.Name][p.UserId] = true
